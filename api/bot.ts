@@ -46,42 +46,46 @@ let videoChatParticipants = new Set()
 
 // Обработчик сообщений
 bot.on("message", async ctx => {
-	const text = ctx.message.text || ""
+    const text = ctx.message.text || ""
 
-	// Фильтруем сообщения, которые содержат фразу о начале видеочата
-	const chatStartedPattern = /(.*) начал(а) видеочат/
+    // Проверяем, что сообщение о начале видеочата от чата (не от бота и не от обычного пользователя)
+    if (ctx.message.chat && text.includes("начал(а) видеочат")) {
+        // Фильтруем сообщения, которые содержат фразу о начале видеочата
+        const chatStartedPattern = /(.*) начал(а) видеочат/
 
-	if (chatStartedPattern.test(text)) {
-		// Сообщение содержит информацию о начале видеочата
-		const chatName = text.match(chatStartedPattern)[1] // Извлекаем название чата
+        if (chatStartedPattern.test(text)) {
+            // Сообщение содержит информацию о начале видеочата
+            const chatName = text.match(chatStartedPattern)[1] // Извлекаем название чата
 
-		// Можно отправить уведомление подписчикам
-		await ctx.reply(`${chatName} начал(а) видеочат. Присоединяйтесь!`)
+            // Отправляем уведомление о начале видеочата
+            await ctx.reply(`${chatName} начал(а) видеочат. Присоединяйтесь!`)
 
-		// Очищаем участников
-		videoChatParticipants.clear()
+            // Очищаем участников
+            videoChatParticipants.clear()
 
-		// Получаем список подписчиков
-		const { data, error } = await supabase.from("subscriptions").select("user_id")
-		if (error) {
-			console.error("Ошибка при получении списка подписчиков:", error)
-			return
-		}
+            // Получаем список подписчиков из базы данных
+            const { data, error } = await supabase.from("subscriptions").select("user_id")
+            if (error) {
+                console.error("Ошибка при получении списка подписчиков:", error)
+                return
+            }
 
-		const subscribers = data.map(sub => sub.user_id)
-		const videoChatLink = `https://t.me/${ctx.chat.username}`
+            const subscribers = data.map(sub => sub.user_id)
+            const videoChatLink = `https://t.me/${ctx.chat.username}`
 
-		// Отправка уведомлений подписчикам
-		await Promise.all(
-			subscribers.map(async userId => {
-				try {
-					await bot.api.sendMessage(userId, `Начало собрания: ${videoChatLink}`)
-				} catch (err) {
-					console.error(`Ошибка отправки сообщения пользователю ${userId}:`, err)
-				}
-			}),
-		)
-	}
+            // Отправка уведомлений подписчикам
+            await Promise.all(
+                subscribers.map(async userId => {
+                    try {
+                        await bot.api.sendMessage(userId, `Начало собрания: ${videoChatLink}`)
+                    } catch (err) {
+                        console.error(`Ошибка отправки сообщения пользователю ${userId}:`, err)
+                    }
+                }),
+            )
+        }
+    }
 })
+
 
 export default webhookCallback(bot, "https")
