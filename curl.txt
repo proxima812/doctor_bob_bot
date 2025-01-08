@@ -1,0 +1,3 @@
+Для grammy.js надо писать это в браузере:
+
+https://api.telegram.org/TOKEN/setWebhook?url=VERCEL_URL/api/bot/

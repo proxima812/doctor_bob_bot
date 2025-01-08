@@ -1,0 +1,23 @@
+{
+	"name": "bot-tg-node",
+	"version": "1.0.0",
+	"description": "",
+	"main": "index.js",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1",
+		"dev": "nodemon --exec ts-node src/api/bot.ts"
+	},
+	"author": "",
+	"license": "ISC",
+	"dependencies": {
+		"@supabase/supabase-js": "^2.46.1",
+		"axios": "^1.7.7",
+		"dotenv": "^16.4.4",
+		"grammy": "^1.20.3",
+		"turndown": "^7.2.0",
+		"vercel": "^33.0.1"
+	},
+	"devDependencies": {
+		"nodemon": "^3.1.7"
+	}
+}
