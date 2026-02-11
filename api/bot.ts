@@ -24,7 +24,7 @@ type AnnouncementRecord = {
 const BOT_TOKEN = process.env.TOKEN
 const ADMIN_USER_ID = Number(process.env.ADMIN_USER_ID,)
 const REQUIRED_TAG = (process.env.REQUIRED_TAG ?? "#анонс_группы").toLowerCase()
-const FORMAT_LINK = process.env.FORMAT_LINK ?? "https://t.me"
+const FORMAT_LINK = process.env.FORMAT_LINK ?? "https://t.me/all_12steps/11031"
 const SPAM_WINDOW_MS = parsePositiveInt(process.env.SPAM_WINDOW_MS, 15_000)
 const SPAM_MAX_MESSAGES = parsePositiveInt(process.env.SPAM_MAX_MESSAGES, 3)
 const DUPLICATE_WINDOW_MS = parsePositiveInt(process.env.DUPLICATE_WINDOW_MS, 30_000)
@@ -114,7 +114,7 @@ bot.on("message", async ctx => {
 		}
 
 		try {
-			await ctx.reply(`пишите по формату. <a href="${FORMAT_LINK}">Формату</a> - ссылка + текст`, {
+			await ctx.reply(`пишите по формату. <a href="${FORMAT_LINK}">Формату</a>`, {
 				parse_mode: "HTML",
 				disable_web_page_preview: true,
 			})
