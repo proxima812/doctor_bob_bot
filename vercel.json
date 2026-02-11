@@ -1,4 +1,6 @@
 {
+	"buildCommand": "bun run build",
+	"outputDirectory": "build",
 	"functions": {
 		"api/bot.ts": {
 			"memory": 1024,
