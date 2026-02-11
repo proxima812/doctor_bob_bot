@@ -1,3 +1,5 @@
 .vercel
 .env
 ./curl.txt
+build/
+build
