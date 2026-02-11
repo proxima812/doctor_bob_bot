@@ -240,5 +240,5 @@ function logEvent(event: string, payload: Record<string, unknown>): void {
 	)
 }
 
-// export default webhookCallback(bot, "https")
-bot.start()
+export default webhookCallback(bot, "https")
+// bot.start()
