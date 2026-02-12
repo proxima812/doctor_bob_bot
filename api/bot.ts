@@ -166,20 +166,27 @@ bot.on("callback_query:data", async ctx => {
 		await ctx.answerCallbackQuery({ text: "Запись не найдена в pending.", show_alert: true })
 		return
 	}
+	const reviewMessageId = ctx.callbackQuery.message?.message_id
 
 	if (action === "reject") {
 		pendingMessages.delete(key)
 		try {
-			await ctx.editMessageText(
-				[
-					"Отклонено",
-					`chat_id: ${chatId}`,
-					`source_message_id: ${messageId}`,
-					"source_unchanged: yes",
-				].join("\n"),
+			if (reviewMessageId !== undefined) {
+				await ctx.api.deleteMessage(ADMIN_USER_ID, reviewMessageId)
+			}
+		} catch (error) {
+			console.error("delete_review_message_error", error)
+		}
+
+		try {
+			await ctx.api.sendMessage(
+				ADMIN_USER_ID,
+				[`Отклонено`, `chat_id: ${chatId}`, `source_message_id: ${messageId}`, "source_unchanged: yes"].join(
+					"\n",
+				),
 			)
 		} catch (error) {
-			console.error("edit_review_message_error", error)
+			console.error("admin_reject_notify_error", error)
 		}
 
 		await ctx.answerCallbackQuery({ text: "Отклонено." })
@@ -187,9 +194,17 @@ bot.on("callback_query:data", async ctx => {
 		return
 	}
 
-	const formatted = formatMinimalText(pending.rawText)
 	let sourceDeleted = false
 	let sentMessageId: number | null = null
+
+	try {
+		const sent = await ctx.api.sendMessage(chatId, pending.rawText, { disable_web_page_preview: true })
+		sentMessageId = sent.message_id
+	} catch (error) {
+		console.error("send_approved_text_error", error)
+		await ctx.answerCallbackQuery({ text: "Не удалось отправить сообщение.", show_alert: true })
+		return
+	}
 
 	try {
 		await ctx.api.deleteMessage(chatId, messageId)
@@ -198,36 +213,21 @@ bot.on("callback_query:data", async ctx => {
 		console.error("delete_source_error", error)
 	}
 
-	try {
-		const sent = await ctx.api.sendMessage(chatId, formatted, { disable_web_page_preview: true })
-		sentMessageId = sent.message_id
-	} catch (error) {
-		console.error("send_formatted_error", error)
-		await ctx.answerCallbackQuery({ text: "Не удалось отправить форматированный текст.", show_alert: true })
-		return
-	}
-
 	pendingMessages.delete(key)
 	await updateApproval(supabase, {
 		chatId,
 		messageId,
-		formattedText: formatted,
+		formattedText: pending.rawText,
 		adminUserId: ADMIN_USER_ID,
 		approvedAt: new Date().toISOString(),
 	})
 
 	try {
-		await ctx.editMessageText(
-			[
-				"Одобрено",
-				`chat_id: ${chatId}`,
-				`source_message_id: ${messageId}`,
-				`deleted: ${sourceDeleted ? "yes" : "no"}`,
-				`sent_message_id: ${sentMessageId ?? "n/a"}`,
-			].join("\n"),
-		)
+		if (reviewMessageId !== undefined) {
+			await ctx.api.deleteMessage(ADMIN_USER_ID, reviewMessageId)
+		}
 	} catch (error) {
-		console.error("edit_review_message_error", error)
+		console.error("delete_review_message_error", error)
 	}
 
 	await ctx.answerCallbackQuery({ text: "Готово." })
@@ -267,36 +267,6 @@ function parseActionData(
 	}
 
 	return { action, chatId, messageId }
-}
-
-function formatMinimalText(text: string): string {
-	const normalized = text.replace(/\s+/g, " ").trim()
-	if (!normalized) {
-		return "[пустое сообщение]"
-	}
-
-	return normalized.replace(/https?:\/\/[^\s]+/gi, url => {
-		const label = getUrlLabel(url)
-		return `${label} (ссылка - ${url})`
-	})
-}
-
-function getUrlLabel(rawUrl: string): string {
-	try {
-		const parsed = new URL(rawUrl)
-		const host = parsed.hostname.toLowerCase().replace(/^www\./, "")
-		if (host.includes("zoom")) {
-			return "zoom"
-		}
-		if (host.includes("t.me") || host.includes("telegram")) {
-			return "telegram"
-		}
-
-		const name = host.split(".")[0] ?? host
-		return name || "ссылка"
-	} catch {
-		return "ссылка"
-	}
 }
 
 async function saveMessageRecord(client: SupabaseClient, record: DbMessageRecord): Promise<void> {
