@@ -1,9 +1,9 @@
 import { webhookCallback } from "grammy"
-
 import { config } from "dotenv"
 import { existsSync } from "fs"
 import { resolve } from "path"
-import { Bot } from "grammy"
+import { Bot, InlineKeyboard } from "grammy"
+import { createClient, type SupabaseClient } from "@supabase/supabase-js"
 
 const envPaths = [resolve(process.cwd(), ".env"), resolve(process.cwd(), "../.env")]
 for (const envPath of envPaths) {
@@ -13,21 +13,31 @@ for (const envPath of envPaths) {
 	}
 }
 
-type AnnouncementRecord = {
+type PendingMessage = {
 	chatId: number
 	userId: number
 	messageId: number
-	createdAt: string
 	rawText: string
 }
 
+type DbMessageRecord = {
+	chatId: number
+	userId: number
+	messageId: number
+	rawText: string
+	formattedText: string | null
+	status: "pending" | "approved"
+	createdAt: string
+	approvedAt: string | null
+	adminUserId: number | null
+	reviewMessageId: number | null
+}
+
 const BOT_TOKEN = process.env.TOKEN
-const ADMIN_USER_ID = Number(process.env.ADMIN_USER_ID,)
-const REQUIRED_TAG = (process.env.REQUIRED_TAG ?? "#анонс_группы").toLowerCase()
-const FORMAT_LINK = process.env.FORMAT_LINK ?? "https://t.me/all_12steps/11031"
-const SPAM_WINDOW_MS = parsePositiveInt(process.env.SPAM_WINDOW_MS, 15_000)
-const SPAM_MAX_MESSAGES = parsePositiveInt(process.env.SPAM_MAX_MESSAGES, 3)
-const DUPLICATE_WINDOW_MS = parsePositiveInt(process.env.DUPLICATE_WINDOW_MS, 30_000)
+const ADMIN_USER_ID = Number(process.env.ADMIN_USER_ID ?? "5522146122")
+const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.URL
+const SUPABASE_KEY = process.env.SUPABASE_KEY ?? process.env.API
+const SUPABASE_TABLE = process.env.SUPABASE_TABLE ?? "messages"
 
 if (!BOT_TOKEN) {
 	throw new Error("TOKEN не найден. Добавьте TOKEN в .env и перезапустите бота.")
@@ -37,12 +47,13 @@ if (!Number.isInteger(ADMIN_USER_ID) || ADMIN_USER_ID <= 0) {
 	throw new Error("ADMIN_USER_ID не найден или некорректен. Добавьте его в .env.")
 }
 
-const bot = new Bot(BOT_TOKEN)
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+	throw new Error("SUPABASE_URL/SUPABASE_KEY (или URL/API) не найдены в .env.")
+}
 
-const spamBuckets = new Map<string, number[]>()
-const lastContentByUser = new Map<string, { hash: string; ts: number }>()
-const lastPinnedByChat = new Map<number, number>()
-const announcementsSessionStore = new Map<string, AnnouncementRecord>()
+const bot = new Bot(BOT_TOKEN)
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
+const pendingMessages = new Map<string, PendingMessage>()
 
 const SERVICE_MESSAGE_KEYS = [
 	"new_chat_members",
@@ -79,109 +90,149 @@ bot.on("message", async ctx => {
 	}
 
 	const userId = ctx.from?.id
+	if (userId === undefined || userId === ADMIN_USER_ID) {
+		return
+	}
+
 	const chatId = ctx.chat.id
 	const messageId = message.message_id
 	const rawText = `${message.text ?? ""}${message.caption ? `\n${message.caption}` : ""}`.trim()
-	const normalizedForChecks = normalizeForChecks(rawText)
-	const isAdmin = userId === ADMIN_USER_ID
+	const safeRawText = rawText || "[пустое сообщение]"
 
-	if (!isAdmin && userId !== undefined) {
-		const rateLimited = hitRateLimit(chatId, userId, Date.now())
-		const duplicate = isDuplicate(chatId, userId, normalizedForChecks, Date.now())
-		if (rateLimited || duplicate) {
-			try {
-				await ctx.api.deleteMessage(chatId, messageId)
-			} catch (error) {
-				console.error("delete_message_error", error)
-			}
+	const pending: PendingMessage = { chatId, userId, messageId, rawText: safeRawText }
+	const key = makePendingKey(chatId, messageId)
+	pendingMessages.set(key, pending)
 
-			logEvent("message_rejected", {
-				chatId,
-				userId,
-				messageId,
-				reason: rateLimited ? "rate_limit" : "duplicate",
-			})
-			return
-		}
-	}
-
-	const hasRequiredTag = normalizedForChecks.includes(REQUIRED_TAG)
-	if (!isAdmin && !hasRequiredTag) {
-		try {
-			await ctx.api.deleteMessage(chatId, messageId)
-		} catch (error) {
-			console.error("delete_message_error", error)
-		}
-
-		try {
-			await ctx.reply(`пишите по формату. <a href="${FORMAT_LINK}">Формату</a>`, {
-				parse_mode: "HTML",
-				disable_web_page_preview: true,
-			})
-		} catch (error) {
-			console.error("reply_error", error)
-		}
-
-		logEvent("message_rejected", {
-			chatId,
-			userId,
-			messageId,
-			reason: "invalid_format",
-		})
-		return
-	}
-
-	if (!hasRequiredTag) {
-		return
-	}
-
-	if (userId !== undefined) {
-		const record: AnnouncementRecord = {
-			chatId,
-			userId,
-			messageId,
-			createdAt: new Date().toISOString(),
-			rawText,
-		}
-		announcementsSessionStore.set(`${chatId}:${messageId}`, record)
-	}
-
-	const previousPinnedMessageId = lastPinnedByChat.get(chatId)
-	if (previousPinnedMessageId !== undefined && previousPinnedMessageId !== messageId) {
-		try {
-			await ctx.api.unpinChatMessage(chatId, previousPinnedMessageId)
-		} catch (error) {
-			console.error("unpin_error", error)
-		}
-	}
-
-	try {
-		await ctx.api.pinChatMessage(chatId, messageId, { disable_notification: true })
-		lastPinnedByChat.set(chatId, messageId)
-	} catch (error) {
-		console.error("pin_error", error)
-	}
-
-	logEvent("announcement_accepted", {
+	await saveMessageRecord(supabase, {
 		chatId,
 		userId,
 		messageId,
-		rawText,
+		rawText: safeRawText,
+		formattedText: null,
+		status: "pending",
+		createdAt: new Date().toISOString(),
+		approvedAt: null,
+		adminUserId: null,
+		reviewMessageId: null,
 	})
+
+	const keyboard = new InlineKeyboard()
+		.text("OK", `approve:${chatId}:${messageId}`)
+		.text("Отклонить", `reject:${chatId}:${messageId}`)
+	const preview = [
+		"Новый текст на согласование",
+		`chat_id: ${chatId}`,
+		`user_id: ${userId}`,
+		`message_id: ${messageId}`,
+		"",
+		safeRawText,
+	].join("\n")
+
+	try {
+		const sent = await ctx.api.sendMessage(ADMIN_USER_ID, preview, {
+			reply_markup: keyboard,
+			disable_web_page_preview: true,
+		})
+		await updateReviewMessageId(supabase, chatId, messageId, sent.message_id)
+	} catch (error) {
+		console.error("admin_notify_error", error)
+	}
+
+	logEvent("message_pending_approval", { chatId, userId, messageId })
 })
 
-function parsePositiveInt(rawValue: string | undefined, fallback: number): number {
-	if (!rawValue) {
-		return fallback
+bot.on("callback_query:data", async ctx => {
+	const userId = ctx.from?.id
+	const data = ctx.callbackQuery.data ?? ""
+	if (!data.startsWith("approve:") && !data.startsWith("reject:")) {
+		return
 	}
 
-	const parsed = Number(rawValue)
-	if (!Number.isInteger(parsed) || parsed <= 0) {
-		return fallback
+	if (userId !== ADMIN_USER_ID) {
+		await ctx.answerCallbackQuery({ text: "Только админ может подтверждать.", show_alert: true })
+		return
 	}
 
-	return parsed
-}
+	const parsed = parseActionData(data)
+	if (!parsed) {
+		await ctx.answerCallbackQuery({ text: "Некорректные данные.", show_alert: true })
+		return
+	}
+
+	const { action, chatId, messageId } = parsed
+	const key = makePendingKey(chatId, messageId)
+	const pending = pendingMessages.get(key) ?? (await loadPendingMessage(supabase, chatId, messageId))
+	if (!pending) {
+		await ctx.answerCallbackQuery({ text: "Запись не найдена в pending.", show_alert: true })
+		return
+	}
+
+	if (action === "reject") {
+		pendingMessages.delete(key)
+		try {
+			await ctx.editMessageText(
+				[
+					"Отклонено",
+					`chat_id: ${chatId}`,
+					`source_message_id: ${messageId}`,
+					"source_unchanged: yes",
+				].join("\n"),
+			)
+		} catch (error) {
+			console.error("edit_review_message_error", error)
+		}
+
+		await ctx.answerCallbackQuery({ text: "Отклонено." })
+		logEvent("message_rejected_by_admin", { chatId, sourceMessageId: messageId })
+		return
+	}
+
+	const formatted = formatMinimalText(pending.rawText)
+	let sourceDeleted = false
+	let sentMessageId: number | null = null
+
+	try {
+		await ctx.api.deleteMessage(chatId, messageId)
+		sourceDeleted = true
+	} catch (error) {
+		console.error("delete_source_error", error)
+	}
+
+	try {
+		const sent = await ctx.api.sendMessage(chatId, formatted, { disable_web_page_preview: true })
+		sentMessageId = sent.message_id
+	} catch (error) {
+		console.error("send_formatted_error", error)
+		await ctx.answerCallbackQuery({ text: "Не удалось отправить форматированный текст.", show_alert: true })
+		return
+	}
+
+	pendingMessages.delete(key)
+	await updateApproval(supabase, {
+		chatId,
+		messageId,
+		formattedText: formatted,
+		adminUserId: ADMIN_USER_ID,
+		approvedAt: new Date().toISOString(),
+	})
+
+	try {
+		await ctx.editMessageText(
+			[
+				"Одобрено",
+				`chat_id: ${chatId}`,
+				`source_message_id: ${messageId}`,
+				`deleted: ${sourceDeleted ? "yes" : "no"}`,
+				`sent_message_id: ${sentMessageId ?? "n/a"}`,
+			].join("\n"),
+		)
+	} catch (error) {
+		console.error("edit_review_message_error", error)
+	}
+
+	await ctx.answerCallbackQuery({ text: "Готово." })
+	logEvent("message_approved", { chatId, sourceMessageId: messageId, sentMessageId })
+})
 
 function isServiceMessage(message: Record<string, unknown>): boolean {
 	for (const key of SERVICE_MESSAGE_KEYS) {
@@ -192,42 +243,152 @@ function isServiceMessage(message: Record<string, unknown>): boolean {
 	return false
 }
 
-function hitRateLimit(chatId: number, userId: number, now: number): boolean {
-	const key = `${chatId}:${userId}`
-	const bucket = spamBuckets.get(key) ?? []
-	const freshTimestamps = bucket.filter(ts => now - ts <= SPAM_WINDOW_MS)
-	if (freshTimestamps.length >= SPAM_MAX_MESSAGES) {
-		spamBuckets.set(key, freshTimestamps)
-		return true
-	}
-
-	freshTimestamps.push(now)
-	spamBuckets.set(key, freshTimestamps)
-	return false
+function makePendingKey(chatId: number, messageId: number): string {
+	return `${chatId}:${messageId}`
 }
 
-function isDuplicate(chatId: number, userId: number, normalizedText: string, now: number): boolean {
-	if (!normalizedText) {
-		return false
+function parseActionData(
+	data: string,
+): { action: "approve" | "reject"; chatId: number; messageId: number } | null {
+	const parts = data.split(":")
+	if (parts.length !== 3) {
+		return null
 	}
 
-	const key = `${chatId}:${userId}`
-	const previous = lastContentByUser.get(key)
-	const hash = normalizedText
-
-	if (previous && previous.hash === hash && now - previous.ts <= DUPLICATE_WINDOW_MS) {
-		return true
+	const action = parts[0]
+	if (action !== "approve" && action !== "reject") {
+		return null
 	}
 
-	lastContentByUser.set(key, { hash, ts: now })
-	return false
+	const chatId = Number(parts[1])
+	const messageId = Number(parts[2])
+	if (!Number.isInteger(chatId) || !Number.isInteger(messageId)) {
+		return null
+	}
+
+	return { action, chatId, messageId }
 }
 
-function normalizeForChecks(text: string): string {
-	return text
-		.toLowerCase()
-		.replace(/\s+/g, " ")
-		.trim()
+function formatMinimalText(text: string): string {
+	const normalized = text.replace(/\s+/g, " ").trim()
+	if (!normalized) {
+		return "[пустое сообщение]"
+	}
+
+	return normalized.replace(/https?:\/\/[^\s]+/gi, url => {
+		const label = getUrlLabel(url)
+		return `${label} (ссылка - ${url})`
+	})
+}
+
+function getUrlLabel(rawUrl: string): string {
+	try {
+		const parsed = new URL(rawUrl)
+		const host = parsed.hostname.toLowerCase().replace(/^www\./, "")
+		if (host.includes("zoom")) {
+			return "zoom"
+		}
+		if (host.includes("t.me") || host.includes("telegram")) {
+			return "telegram"
+		}
+
+		const name = host.split(".")[0] ?? host
+		return name || "ссылка"
+	} catch {
+		return "ссылка"
+	}
+}
+
+async function saveMessageRecord(client: SupabaseClient, record: DbMessageRecord): Promise<void> {
+	const payload = {
+		chat_id: record.chatId,
+		user_id: record.userId,
+		message_id: record.messageId,
+		raw_text: record.rawText,
+		formatted_text: record.formattedText,
+		status: record.status,
+		created_at: record.createdAt,
+		approved_at: record.approvedAt,
+		admin_user_id: record.adminUserId,
+		review_message_id: record.reviewMessageId,
+	}
+	const { error } = await client.from(SUPABASE_TABLE).upsert(payload, {
+		onConflict: "chat_id,message_id",
+		ignoreDuplicates: false,
+	})
+	if (error) {
+		console.error("supabase_insert_error", error.message)
+	}
+}
+
+async function updateReviewMessageId(
+	client: SupabaseClient,
+	chatId: number,
+	messageId: number,
+	reviewMessageId: number,
+): Promise<void> {
+	const { error } = await client
+		.from(SUPABASE_TABLE)
+		.update({ review_message_id: reviewMessageId })
+		.eq("chat_id", chatId)
+		.eq("message_id", messageId)
+	if (error) {
+		console.error("supabase_review_update_error", error.message)
+	}
+}
+
+async function loadPendingMessage(
+	client: SupabaseClient,
+	chatId: number,
+	messageId: number,
+): Promise<PendingMessage | null> {
+	const { data, error } = await client
+		.from(SUPABASE_TABLE)
+		.select("chat_id, user_id, message_id, raw_text")
+		.eq("chat_id", chatId)
+		.eq("message_id", messageId)
+		.eq("status", "pending")
+		.maybeSingle()
+
+	if (error) {
+		console.error("supabase_load_pending_error", error.message)
+		return null
+	}
+	if (!data) {
+		return null
+	}
+
+	return {
+		chatId: Number(data.chat_id),
+		userId: Number(data.user_id),
+		messageId: Number(data.message_id),
+		rawText: String(data.raw_text ?? ""),
+	}
+}
+
+async function updateApproval(
+	client: SupabaseClient,
+	input: {
+		chatId: number
+		messageId: number
+		formattedText: string
+		adminUserId: number
+		approvedAt: string
+	},
+): Promise<void> {
+	const { error } = await client
+		.from(SUPABASE_TABLE)
+		.update({
+			formatted_text: input.formattedText,
+			status: "approved",
+			admin_user_id: input.adminUserId,
+			approved_at: input.approvedAt,
+		})
+		.eq("chat_id", input.chatId)
+		.eq("message_id", input.messageId)
+	if (error) {
+		console.error("supabase_approve_update_error", error.message)
+	}
 }
 
 function logEvent(event: string, payload: Record<string, unknown>): void {
