@@ -170,6 +170,7 @@ bot.on("callback_query:data", async ctx => {
 
 	if (action === "reject") {
 		pendingMessages.delete(key)
+		await deleteMessageRecord(supabase, chatId, messageId)
 		try {
 			if (reviewMessageId !== undefined) {
 				await ctx.api.deleteMessage(ADMIN_USER_ID, reviewMessageId)
@@ -221,6 +222,7 @@ bot.on("callback_query:data", async ctx => {
 		adminUserId: ADMIN_USER_ID,
 		approvedAt: new Date().toISOString(),
 	})
+	await deleteMessageRecord(supabase, chatId, messageId)
 
 	try {
 		if (reviewMessageId !== undefined) {
@@ -358,6 +360,17 @@ async function updateApproval(
 		.eq("message_id", input.messageId)
 	if (error) {
 		console.error("supabase_approve_update_error", error.message)
+	}
+}
+
+async function deleteMessageRecord(client: SupabaseClient, chatId: number, messageId: number): Promise<void> {
+	const { error } = await client
+		.from(SUPABASE_TABLE)
+		.delete()
+		.eq("chat_id", chatId)
+		.eq("message_id", messageId)
+	if (error) {
+		console.error("supabase_delete_message_error", error.message)
 	}
 }
 
