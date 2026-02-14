@@ -54,6 +54,7 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 const bot = new Bot(BOT_TOKEN)
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 const pendingMessages = new Map<string, PendingMessage>()
+const BYPASS_MODERATION_TAGS = new Set(["анонс", "группа", "объявления"])
 
 const SERVICE_MESSAGE_KEYS = [
 	"new_chat_members",
@@ -97,6 +98,12 @@ bot.on("message", async ctx => {
 	const chatId = ctx.chat.id
 	const messageId = message.message_id
 	const rawText = `${message.text ?? ""}${message.caption ? `\n${message.caption}` : ""}`.trim()
+
+	if (hasBypassModerationTag(rawText)) {
+		logEvent("message_bypassed_by_tag", { chatId, userId, messageId })
+		return
+	}
+
 	const safeRawText = rawText || "[пустое сообщение]"
 
 	const pending: PendingMessage = { chatId, userId, messageId, rawText: safeRawText }
@@ -247,6 +254,21 @@ function isServiceMessage(message: Record<string, unknown>): boolean {
 
 function makePendingKey(chatId: number, messageId: number): string {
 	return `${chatId}:${messageId}`
+}
+
+function hasBypassModerationTag(text: string): boolean {
+	if (!text) {
+		return false
+	}
+
+	const tags = text.match(/#[\p{L}\p{N}_]+/gu) ?? []
+	for (const tag of tags) {
+		const normalized = tag.slice(1).toLocaleLowerCase("ru-RU")
+		if (BYPASS_MODERATION_TAGS.has(normalized)) {
+			return true
+		}
+	}
+	return false
 }
 
 function parseActionData(
