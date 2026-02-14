@@ -104,6 +104,25 @@ bot.on("message", async ctx => {
 		return
 	}
 
+	try {
+		await ctx.api.deleteMessage(chatId, messageId)
+		logEvent("message_deleted_missing_tag", { chatId, userId, messageId })
+	} catch (error) {
+		console.error("delete_missing_tag_message_error", error)
+	}
+
+	try {
+		await ctx.api.sendMessage(
+			chatId,
+			`<a href="tg://user?id=${userId}">Участник</a>, сообщение удалено. Перед публикацией прочитайте формат: https://t.me/all_12steps/11031`,
+			{ parse_mode: "HTML", disable_web_page_preview: true },
+		)
+	} catch (error) {
+		console.error("notify_missing_tag_format_error", error)
+	}
+
+	return
+
 	const safeRawText = rawText || "[пустое сообщение]"
 
 	const pending: PendingMessage = { chatId, userId, messageId, rawText: safeRawText }
