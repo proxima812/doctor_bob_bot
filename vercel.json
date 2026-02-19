@@ -5,6 +5,16 @@
 		"api/bot.ts": {
 			"memory": 1024,
 			"maxDuration": 10
+		},
+		"api/cron.ts": {
+			"memory": 512,
+			"maxDuration": 10
 		}
-	}
+	},
+	"crons": [
+		{
+			"path": "/api/cron",
+			"schedule": "0 10 * * 1"
+		}
+	]
 }
