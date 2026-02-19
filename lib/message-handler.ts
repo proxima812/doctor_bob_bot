@@ -22,12 +22,26 @@ export function registerMessageHandler(bot: Bot<Context>, deps: MessageHandlerDe
 		}
 
 		const message = ctx.message
-		if (isServiceMessage(message)) {
+		const userId = ctx.from?.id
+		if (userId === undefined || userId === deps.adminUserId || deps.whitelistUserIds.has(userId)) {
 			return
 		}
 
-		const userId = ctx.from?.id
-		if (userId === undefined || userId === deps.adminUserId || deps.whitelistUserIds.has(userId)) {
+		if ("new_chat_members" in message && Array.isArray(message.new_chat_members)) {
+			const addedBot = message.new_chat_members.some(member => member.is_bot)
+			if (addedBot) {
+				try {
+					await ctx.api.banChatMember(ctx.chat.id, userId)
+					await deps.moderationRepository.incrementDailyStat(ctx.chat.id, "users_banned")
+					logEvent("user_banned_for_adding_bot", { chatId: ctx.chat.id, userId })
+				} catch (error) {
+					console.error("ban_user_for_adding_bot_error", error)
+				}
+				return
+			}
+		}
+
+		if (isServiceMessage(message)) {
 			return
 		}
 
@@ -62,7 +76,7 @@ export function registerMessageHandler(bot: Bot<Context>, deps: MessageHandlerDe
 			try {
 				const participantName = escapeHtml(getParticipantName(ctx.from))
 				const warningPrefix = decision.shouldWarn ? " Это предупреждение." : ""
-				const noticeLifetimeMs = decision.shouldWarn ? 15_000 : 30_000
+				const noticeLifetimeMs = 5_000
 				const warning = await ctx.api.sendMessage(
 					chatId,
 					`<a href="tg://user?id=${userId}">${participantName}</a>, сообщение удалено.${warningPrefix} Перед публикацией прочитайте формат: ${deps.formatGuideUrl}`,
