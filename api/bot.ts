@@ -1,14 +1,14 @@
 import { limit } from "@grammyjs/ratelimiter"
 import { createClient } from "@supabase/supabase-js"
-import { Bot, webhookCallback, type Context } from "grammy"
+import { Bot, webhookCallback } from "grammy"
 
-import { registerCallbackHandler } from "./modules/callback-handler"
-import { loadConfig } from "./modules/config"
-import { logEvent } from "./modules/logger"
-import { registerMessageHandler } from "./modules/message-handler"
-import { createMessageRepository } from "./modules/message-repository"
-import { createModerationRepository } from "./modules/moderation-repository"
-import { createModerationState } from "./modules/moderation-state"
+import { registerCallbackHandler } from "../lib/callback-handler"
+import { loadConfig } from "../lib/config"
+import { logEvent } from "../lib/logger"
+import { registerMessageHandler } from "../lib/message-handler"
+import { createMessageRepository } from "../lib/message-repository"
+import { createModerationRepository } from "../lib/moderation-repository"
+import { createModerationState } from "../lib/moderation-state"
 
 const appConfig = loadConfig()
 
@@ -23,11 +23,11 @@ const moderationRepository = createModerationRepository(supabase, {
 })
 const state = createModerationState()
 
-const limiterMiddleware = limit<Context>({
+const limiterMiddleware = limit({
 	timeFrame: appConfig.rateLimitWindowMs,
 	limit: appConfig.rateLimitMaxMessages,
-	keyGenerator: ctx => `${ctx.chat?.id ?? "private"}:${ctx.from?.id ?? "anon"}`,
-	onLimitExceeded: async ctx => {
+	keyGenerator: (ctx: any) => `${ctx.chat?.id ?? "private"}:${ctx.from?.id ?? "anon"}`,
+	onLimitExceeded: async (ctx: any) => {
 		if (!ctx.chat || (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup")) {
 			return
 		}

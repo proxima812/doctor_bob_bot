@@ -1,6 +1,6 @@
 import { BYPASS_MODERATION_TAGS, SERVICE_MESSAGE_KEYS } from "./constants"
 
-export function isServiceMessage(message: Record<string, unknown>): boolean {
+export function isServiceMessage(message: object): boolean {
 	for (const key of SERVICE_MESSAGE_KEYS) {
 		if (key in message) {
 			return true
@@ -47,7 +47,7 @@ export function getParticipantName(user: { first_name?: string; last_name?: stri
 }
 
 export function escapeHtml(value: string): string {
-	return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+	return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
 
 export function parseActionData(

@@ -64,7 +64,7 @@ export function registerMessageHandler(bot: Bot<Context>, deps: MessageHandlerDe
 				const warning = await ctx.api.sendMessage(
 					chatId,
 					`<a href="tg://user?id=${userId}">${participantName}</a>, сообщение удалено. Перед публикацией прочитайте формат: ${deps.formatGuideUrl}`,
-					{ parse_mode: "HTML", disable_web_page_preview: true },
+					{ parse_mode: "HTML" },
 				)
 
 				await deps.moderationRepository.incrementDailyStat(chatId, "warnings_sent")

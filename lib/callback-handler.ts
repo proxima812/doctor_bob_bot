@@ -70,7 +70,7 @@ export function registerCallbackHandler(bot: Bot<Context>, deps: CallbackHandler
 		let sentMessageId: number | null = null
 
 		try {
-			const sent = await ctx.api.sendMessage(chatId, pending.rawText, { disable_web_page_preview: true })
+			const sent = await ctx.api.sendMessage(chatId, pending.rawText)
 			sentMessageId = sent.message_id
 		} catch (error) {
 			console.error("send_approved_text_error", error)
