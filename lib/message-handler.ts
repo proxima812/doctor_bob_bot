@@ -58,16 +58,20 @@ export function registerMessageHandler(bot: Bot<Context>, deps: MessageHandlerDe
 			banAtViolation: deps.banAtViolation,
 		})
 
-		if (decision.shouldWarn) {
+		if (!decision.shouldBan) {
 			try {
 				const participantName = escapeHtml(getParticipantName(ctx.from))
+				const warningPrefix = decision.shouldWarn ? " Это предупреждение." : ""
+				const noticeLifetimeMs = decision.shouldWarn ? 15_000 : 30_000
 				const warning = await ctx.api.sendMessage(
 					chatId,
-					`<a href="tg://user?id=${userId}">${participantName}</a>, сообщение удалено. Перед публикацией прочитайте формат: ${deps.formatGuideUrl}`,
+					`<a href="tg://user?id=${userId}">${participantName}</a>, сообщение удалено.${warningPrefix} Перед публикацией прочитайте формат: ${deps.formatGuideUrl}`,
 					{ parse_mode: "HTML" },
 				)
 
-				await deps.moderationRepository.incrementDailyStat(chatId, "warnings_sent")
+				if (decision.shouldWarn) {
+					await deps.moderationRepository.incrementDailyStat(chatId, "warnings_sent")
+				}
 
 				setTimeout(async () => {
 					try {
@@ -75,7 +79,7 @@ export function registerMessageHandler(bot: Bot<Context>, deps: MessageHandlerDe
 					} catch (error) {
 						console.error("delete_format_warning_message_error", error)
 					}
-				}, deps.warningDeleteAfterMs)
+				}, noticeLifetimeMs)
 			} catch (error) {
 				console.error("notify_missing_tag_format_error", error)
 			}
